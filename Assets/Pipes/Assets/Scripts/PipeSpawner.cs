@@ -5,233 +5,147 @@ using System.Collections.Generic;
 public class PipeSpawner : MonoBehaviour
 {
     public int desiredActivePipeCount = 1; // Number of active pipes to maintain
-    public float pipeSpeed = 13f; // Speed of the pipes
+    public float pipeSpeed = 1f; // Speed of the pipes
     public int maxPipesOnScreen = 7; // Maximum number of pipes allowed on screen at once
     public int minPipeTurns = 100; // Minimum number of turns a pipe must make
     public int maxPipeTurns = 200; // Maximum number of turns a pipe can make
-    public Material material; // Material for the pipes
-    public Material fadeMaterial; // Material for fading the pipes
-    public float fadeTime = 2f; // Duration of the fade out effect
-    public Texture2D pausedImage; // Image to display when paused
-
+    public float pipeRadius = 0.5f; // Radius of the pipe segments
     private int activePipes = 0; // Counter for active pipes
     private List<Pipe> finishedPipes = new List<Pipe>(); // List to keep track of finished pipes
-    private RotateCamera rotateCam; // Reference to the RotateCamera script
     private bool paused = false; // Flag to check if the spawner is paused
-    private bool showSettings = false; // Flag to toggle settings display
-    public Rect settingsWindowRect = new Rect(10, 20, 200, 200); // Position and size of the settings window
+    private Pipe currentPipe = null; // Reference to the current pipe being generated
+    public Vector3 boundarySize = new Vector3(60, 30, 60); // Boundary size for the pipes
 
-    void Awake()
-    {
-        rotateCam = Camera.main.GetComponent<RotateCamera>(); // Get the RotateCamera component from the main camera
-    }
+    private Dictionary<Vector3, bool> occupiedPositions = new Dictionary<Vector3, bool>(); // Dictionary to keep track of occupied positions
 
     void Start()
     {
-        StartCoroutine(SpawnPipes()); // Start the coroutine to spawn pipes
+        StartCoroutine(SpawnPipe()); // Start the coroutine to spawn pipes
     }
 
-    IEnumerator SpawnPipes()
+    IEnumerator SpawnPipe()
     {
-        while (activePipes < desiredActivePipeCount && !paused)
+        while (!paused) // Continue spawning pipes if not paused
         {
-            SpawnPipe(); // Spawn a new pipe
-            yield return new WaitForSeconds(Random.Range(.5f, 1f)); // Wait for a random duration before spawning the next pipe
+            if (currentPipe == null && activePipes < maxPipesOnScreen) // Check if a new pipe can be spawned
+            {
+                Vector3 startPosition = GetRandomUnoccupiedPosition(); // Get a random unoccupied position
+                if (startPosition == Vector3.zero) // If no positions are available, log a message and exit
+                {
+                    Debug.Log("No points available to start a new pipe");
+                    yield break;
+                }
+
+                GameObject pipeObj = new GameObject("Pipe"); // Create a new GameObject for the pipe
+                Pipe pipe = pipeObj.AddComponent<Pipe>(); // Add the Pipe component to the GameObject
+                pipe.SetSpeed(pipeSpeed); // Set the speed of the pipe
+                pipe.SetMaxTurns(Random.Range(minPipeTurns, maxPipeTurns)); // Set the maximum number of turns for the pipe
+                pipe.boundarySize = boundarySize; // Set the boundary size for the pipe
+                pipe.OnPipeFinished += OnPipeFinished; // Subscribe to the OnPipeFinished event
+
+                pipe.StartGeneration(startPosition, GetRandomInitialDirection()); // Start generating the pipe
+
+                activePipes++; // Increment the active pipes count
+                currentPipe = pipe; // Set the current pipe
+
+                // Add the start position to the occupied positions
+                if (!occupiedPositions.ContainsKey(startPosition))
+                    occupiedPositions.Add(startPosition, true);
+            }
+            yield return new WaitUntil(() => !currentPipe.isGenerating); // Wait until the current pipe finishes generating
         }
     }
 
+    // Return the paused state
     public bool IsPaused()
     {
-        return paused; // Return the paused state
+        return paused;
     }
 
+    // Set the speed for each active pipe
     void SetSpeed(float speed)
     {
         foreach (Pipe pipe in FindObjectsOfType<Pipe>())
         {
-            pipe.SetSpeed(speed); // Set the speed for each active pipe
+            pipe.SetSpeed(speed);
         }
     }
 
-    void OnGUI()
-    {
-        showSettings = GUILayout.Toggle(showSettings, "Settings"); // Toggle the settings display
-
-        if (showSettings)
-        {
-            settingsWindowRect = GUILayout.Window(0, settingsWindowRect, SettingsWindow, "Settings"); // Display the settings window
-            settingsWindowRect.x = Mathf.Clamp(settingsWindowRect.x, 0, Screen.width - settingsWindowRect.width); // Clamp the window position within the screen
-            settingsWindowRect.y = Mathf.Clamp(settingsWindowRect.y, 0, Screen.height - 20);
-        }
-
-        if (paused)
-        {
-            if (pausedImage != null)
-            {
-                if (GUI.Button(new Rect(Screen.width / 2f - pausedImage.width / 2f, Screen.height - pausedImage.height - 20, pausedImage.width, pausedImage.height), pausedImage, GUIStyle.none))
-                    TogglePause(); // Toggle pause state when the image button is clicked
-            }
-            else
-                GUI.Label(new Rect(Screen.width / 2f - 60, Screen.height - 40, 120, 24), "PAUSED"); // Display paused text if no image is set
-        }
-    }
-
-    void Update()
-    {
-        if (Input.GetKeyUp(KeyCode.Space))
-        {
-            TogglePause(); // Toggle pause state when the space key is pressed
-        }
-    }
-
-    public void TogglePause()
-    {
-        paused = !paused;
-
-        if (!paused && activePipes < desiredActivePipeCount)
-        {
-            SetSpeed(pipeSpeed);
-            StartCoroutine(SpawnPipes());
-        }
-
-        SetSpeed(paused ? 0f : pipeSpeed); // Set speed to 0 if paused, else set to pipeSpeed
-    }
-
-    void SettingsWindow(int id)
-    {
-        int tmp = 0;
-        bool doUpdate = false;
-
-        GUILayout.Label("\"Escape\" key to Quit\n\"Space\" key to Pause");
-
-        GUILayout.Label("Active Pipes: " + desiredActivePipeCount);
-        {
-            tmp = desiredActivePipeCount;
-            desiredActivePipeCount = (int)GUILayout.HorizontalSlider(desiredActivePipeCount, 1, 8);
-
-            if (desiredActivePipeCount != tmp)
-            {
-                if (activePipes > desiredActivePipeCount)
-                {
-                    int end = activePipes - desiredActivePipeCount, i = 0;
-
-                    foreach (Pipe p in FindObjectsOfType<Pipe>())
-                    {
-                        if (!p.IsPaused())
-                        {
-                            p.EndPipe(); // End the pipe if it's not paused
-
-                            if (++i > end)
-                                break;
-                        }
-                    }
-                }
-                else
-                {
-                    if (!paused)
-                        doUpdate = true;
-                }
-            }
-        }
-
-        GUILayout.Label("Max Pipes on Screen: " + maxPipesOnScreen);
-        {
-            tmp = maxPipesOnScreen;
-            maxPipesOnScreen = (int)GUILayout.HorizontalSlider(maxPipesOnScreen, desiredActivePipeCount, 12);
-            if (tmp != maxPipesOnScreen)
-                doUpdate = true;
-        }
-
-        GUILayout.Label("Speed: " + pipeSpeed);
-        {
-            tmp = (int)pipeSpeed;
-            pipeSpeed = GUILayout.HorizontalSlider(pipeSpeed, 1f, 40f);
-
-            if ((int)pipeSpeed != tmp && !paused)
-                SetSpeed(pipeSpeed); // Update the speed of the pipes if it has changed and not paused
-        }
-
-        GUILayout.Space(6);
-
-        GUILayout.Label("Camera Orbit Speed: " + rotateCam.idleSpeed.ToString("F2"));
-        {
-            rotateCam.idleSpeed = GUILayout.HorizontalSlider(rotateCam.idleSpeed, .01f, 10f); // Update the camera orbit speed
-        }
-
-        if (GUILayout.Button("Reset"))
-        {
-            ResetPipes(); // Call the ResetPipes method to reset the pipe system
-        }
-
-        if (doUpdate)
-        {
-            ClearPipes(); // Clear finished pipes if necessary
-            if (activePipes < desiredActivePipeCount)
-                StartCoroutine(SpawnPipes());
-        }
-
-        GUI.DragWindow(new Rect(0, 0, 10000, 20)); // Allow the settings window to be dragged
-    }
-
+    // Handle the completion of a pipe
     public void OnPipeFinished(Pipe pipe)
     {
         pipe.OnPipeFinished -= this.OnPipeFinished; // Unsubscribe from the OnPipeFinished event
-
         activePipes--; // Decrement the active pipes count
-
         finishedPipes.Add(pipe); // Add the finished pipe to the list
 
-        ClearPipes(); // Clear finished pipes if necessary
-
-        if (activePipes < desiredActivePipeCount)
-            StartCoroutine(SpawnPipes()); // Spawn new pipes if needed
-    }
-
-    void SpawnPipe()
-    {
-        GameObject pipeObj = new GameObject("Pipe"); // Create a new GameObject for the pipe
-        Pipe pipe = pipeObj.AddComponent<Pipe>(); // Add the Pipe component to the GameObject
-        pipe.SetSpeed(pipeSpeed); // Set the speed of the pipe
-        pipe.SetMaxTurns((int)Random.Range(minPipeTurns, maxPipeTurns)); // Set the maximum number of turns for the pipe
-        pipe.pipeColor = Random.ColorHSV(0f, 1f, 0.5f, 1f, 0.5f, 1f); // Set a new random lighter color for the pipe
-
-        pipe.OnPipeFinished += OnPipeFinished; // Subscribe to the OnPipeFinished event
-
-        activePipes++; // Increment the active pipes count
-    }
-
-    void ClearPipes()
-    {
-        int totalPipeCount = activePipes + finishedPipes.Count; // Calculate the total pipe count
-
-        while (totalPipeCount > maxPipesOnScreen && finishedPipes.Count > 0)
+        // Add all pipe segments to the occupied positions
+        foreach (Transform segment in pipe.transform)
         {
-            finishedPipes[0].GetComponent<Pipe>().FadeOut(fadeTime, 0f, fadeMaterial); // Fade out the oldest finished pipe
-            finishedPipes.RemoveAt(0); // Remove the faded pipe from the list
-            totalPipeCount--; // Decrement the total pipe count
+            if (!occupiedPositions.ContainsKey(segment.position))
+                occupiedPositions.Add(segment.position, true);
+        }
+
+        currentPipe = null; // Clear the reference to the current pipe
+
+        if (activePipes < desiredActivePipeCount) // Check if more pipes need to be spawned
+        {
+            StartCoroutine(SpawnPipe()); // Spawn new pipes if needed
         }
     }
 
+    // Reset all pipes and start spawning new pipes
     public void ResetPipes()
     {
         activePipes = 0; // Reset the active pipes count
         finishedPipes.Clear(); // Clear the list of finished pipes
+        occupiedPositions.Clear(); // Clear the dictionary of occupied positions
 
         foreach (Pipe pipe in FindObjectsOfType<Pipe>())
         {
             Destroy(pipe.gameObject); // Destroy all active pipe GameObjects
         }
 
-        StartCoroutine(SpawnPipes()); // Restart spawning pipes
+        StartCoroutine(SpawnPipe()); // Restart spawning pipes
     }
 
-    Vector3 GetStartPosition()
+    // Get a random unoccupied position within the boundary
+    Vector3 GetRandomUnoccupiedPosition()
     {
-        return Vector3.zero; // Start at the origin
+        List<Vector3> availablePositions = new List<Vector3>();
+
+        // Iterate through all possible positions within the boundary
+        for (float x = -boundarySize.x / 2; x <= boundarySize.x / 2; x += pipeRadius * 2)
+        {
+            for (float y = -boundarySize.y / 2; y <= boundarySize.y / 2; y += pipeRadius * 2)
+            {
+                for (float z = -boundarySize.z / 2; z <= boundarySize.z / 2; z += pipeRadius * 2)
+                {
+                    Vector3 potentialPosition = new Vector3(x, y, z);
+                    if (!occupiedPositions.ContainsKey(potentialPosition))
+                    {
+                        availablePositions.Add(potentialPosition);
+                    }
+                }
+            }
+        }
+
+        if (availablePositions.Count == 0)
+        {
+            return Vector3.zero; // Return Vector3.zero if no available positions are found
+        }
+
+        return availablePositions[Random.Range(0, availablePositions.Count)];
     }
 
-    void OnDrawGizmos()
+    // Get a random initial direction for the pipe
+    Vector3 GetRandomInitialDirection()
     {
-        // Optionally, you can draw gizmos for visualization if needed.
+        List<Vector3> directions = new List<Vector3> {
+            Vector3.forward, Vector3.back,
+            Vector3.left, Vector3.right,
+            Vector3.up, Vector3.down
+        };
+
+        return directions[Random.Range(0, directions.Count)];
     }
 }
